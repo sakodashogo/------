@@ -1,0 +1,24 @@
+\begin{table}[!htbp]
+  \centering
+  \caption{Gap OnlyとKey Motifにおけるテストデータの原子カテゴリ別の力予測誤差（N=10）}
+  \label{tab:force_error_by_category}
+  \small
+  \begin{tabular}{lccccc}
+    \toprule
+    \multirow{2}{*}{カテゴリ} & \multicolumn{2}{c}{GapOnly} & \multicolumn{2}{c}{KeyMotif} & \multirow{2}{*}{誤差比} \\
+    \cmidrule(lr){2-3} \cmidrule(lr){4-5}
+    & 原子数 & Force RMSE & 原子数 & Force RMSE & \\
+    \midrule
+    Outlier (Pt) & 5 & 0.221 & 3 & 0.112 & 1.27x \\
+    Outlier (第一近接) & 20 & 0.548 & 0 & --- & 3.15x \\
+    Outlier (その他) & 15 & 0.167 & 0 & --- & 0.96x \\
+    Normal (Pt) & 95 & 0.382 & 97 & 0.277 & 2.19x \\
+    Normal (第一近接) & 1075 & 0.532 & 1095 & 0.454 & 3.06x \\
+    Normal (第二近接) & 2870 & 0.191 & 2880 & 0.232 & 1.10x \\
+    Normal (遠方) & 16320 & 0.174 & 16325 & 0.223 & 1.00x \\
+    \midrule
+    \textbf{外挿原子（合計）} & \textbf{40} & \textbf{0.408} & \textbf{3} & \textbf{0.112} & \textbf{1.92x} \\
+    非外挿原子（合計） & 20360 & 0.212 & 20397 & 0.242 & 1.00x \\
+    \bottomrule
+  \end{tabular}
+\end{table}

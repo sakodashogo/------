@@ -1,0 +1,576 @@
+\documentclass[uplatex, dvipdfmx]{jsbook}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{multirow}
+\usepackage{geometry}
+\usepackage[version=4]{mhchem} % 化学式用パッケージを追加
+\usepackage{siunitx} % 単位用パッケージを追加
+\geometry{left=25mm,right=25mm,top=30mm,bottom=30mm}
+
+\title{Al-Fe-Pt三元系合金における \\ 高次元ニューラルネットワークポテンシャルの \\ 外挿精度向上に関する研究 \\ \vspace{0.5em} \large ―キーモチーフ指向データ拡張手法の開発と実証―}
+\author{迫田 章吾}
+\date{\today}
+\begin{document}
+\maketitle
+\chapter*{要旨}
+機械学習ポテンシャル（MLIP）は第一原理計算の精度と古典ポテンシャルの計算速度を両立する手法として注目されているが、訓練データに含まれない原子環境への適用時に精度が大幅に低下する「外挿問題」が実用上の障壁となっている。本研究では、\ce{Al-Fe-Pt}三元系合金を対象とし、高次元ニューラルネットワークポテンシャル（HDNNP）の外挿精度を向上させる新しいデータ拡張手法「キーモチーフ指向データ拡張」を開発した。
+提案手法は以下の4ステップからなる。(1) 分析：動径分布関数（RDF）と角度分布関数（ADF）を用いて訓練データとテストデータの構造的差異（カバーギャップ）を定量化する。ビン幅の決定には島崎・篠本の方法を採用し、客観的な分布比較を実現する。(2) 抽出：外挿原子（対称性関数の値が訓練範囲を逸脱する原子）の局所環境とカバーギャップを照合し、予測誤差の原因となる「キーモチーフ」をスコアリングにより特定する。(3) 設計：結晶学的知識に基づき、キーモチーフを高密度に含む「代理構造」を自動生成する。(4) 追加と再学習：代理構造のDFT計算結果を訓練データに追加し、HDNNPを更新する。
+本手法を\ce{Al13Fe4}ベースのPtドープ合金に適用し、代理構造の選択戦略が精度に与える影響を検証した。その結果、外挿度とギャップ充填を考慮した統合戦略（Key Motif）において、わずか4構造の追加学習でテストデータに対するEnergy RMSEが49.1~meV/atomから3.97~meV/atomへと92\%改善し、第一原理計算に匹敵する精度を達成した。比較実験において、Gapのみを埋める戦略は平均誤差こそ最小化できるものの、重要なドーパント周辺の局所環境を学習できずに放置してしまうことが判明した。対してKey Motifは、平均精度ではGap戦略に劣る場合があるものの、ドーパントを含む全ての局所環境の学習漏れを劇的に低減し、実用材料の探索において不可欠な「高い信頼性と安全性」を保証する戦略であることを実証した。
+本研究で開発したキーモチーフ指向データ拡張は、MDシミュレーションに依存しない新しいデータ拡張戦略であり、複雑金属間化合物やドープ合金など、訓練データとターゲット構造の間に構造ギャップが生じやすい系に対して有効なアプローチとなる。
+\vspace{1em}
+\\
+\noindent \textbf{キーワード: 高次元ニューラルネットワークポテンシャル (HDNNP)、機械学習ポテンシャル、外挿問題、アクティブラーニング、Al-Fe-Pt合金、データ拡張}
+
+
+\tableofcontents
+\chapter{序論}
+
+\section{研究の背景}
+
+\subsection{大規模原子シミュレーションの重要性}
+現代の材料科学、物理学、化学などの分野において、物質の特性を原子・電子レベルで理解し予測することは極めて重要である。特に合金材料の開発においては、組成や原子配列の自由度が無限に存在するため、実験的な試行錯誤のみで最適な材料を探索することは非常に困難であり、探索空間を網羅的に調べるには計算科学によるアプローチが不可欠である。
+
+原子レベルのシミュレーション手法として、主に第一原理計算（Density Functional Theory: DFT）と古典分子動力学法（Classical Molecular Dynamics: CMD）が長年用いられてきた。DFTは量子力学に基づいて電子状態を解くため、実験値を再現する高い精度を持ち、化学反応や結合の形成・解離を正確に記述できる。しかし、計算コストが原子数 $N$ に対して $O(N^3)$ で増大するため、扱える系は数百原子程度に限られる。
+
+一方、古典ポテンシャルは、原子間の相互作用をLennard-JonesポテンシャルやEmbedded Atom Method (EAM) などの経験的な関数で近似する。これにより数百万原子以上の大規模系のシミュレーションが可能となるが、原子間の結合形成や切断といった化学的プロセスや、パラメータ化されていない複雑な多元系合金の記述には精度面で限界がある。特に、新奇な組成や未知の構造に対しては、既存の関数形では対応できない場合が多い。
+
+\subsection{機械学習ポテンシャル（MLIP）の台頭}
+近年、これら二つの手法の「トレードオフ」を解消する第三の手法として、機械学習ポテンシャル（Machine Learning Interatomic Potential: MLIP）が急速に発展している。MLIPは、高精度なDFT計算の結果を教師データとして、原子配置とエネルギー・力との関係を機械学習モデルに学習させる手法である。学習後のモデルは、DFTに匹敵する精度（ab initio accuracy）を維持しながら、古典ポテンシャルに近い計算速度で推論を行うことができる。
+
+2007年にBehlerとParrinelloによって提案された高次元ニューラルネットワークポテンシャル（High-Dimensional Neural Network Potential: HDNNP）\cite{behler2007}をはじめ、MLIPの研究は急速に進展しており、従来はDFTでは計算不可能だった大規模かつ長時間な現象（相転移、熱伝導、亀裂進展など）を高精度に解析することが現実的となっている。
+
+\section{High-Dimensional Neural Network Potential（HDNNP）}
+
+\subsection{基本アーキテクチャ}
+本研究で用いるHDNNPは、系の全エネルギー $E_{\text{total}}$ を、系を構成する各原子 $i$ の局所的なエネルギー寄与 $E_i$ の総和として表現する\cite{behler2007}。
+
+\begin{equation}
+ E_{\text{total}} = \sum_{i=1}^{N} E_i 
+\end{equation}
+
+この $E_i$ は、原子 $i$ の周囲の局所的な化学環境（近接原子の配置）に依存する値として、原子ごとに用意されたニューラルネットワークによって予測される。この構造により、HDNNPは原子数の増減に対して柔軟に対応でき、訓練したサイズよりも遥かに大きな系（スーパーセルなど）に対しても適用可能となる。
+
+\subsection{対称性関数 (Symmetry Functions)}
+ニューラルネットワークの入力には、原子のデカルト座標 $(x, y, z)$ そのものではなく、「対称性関数」と呼ばれる記述子が用いられる\cite{behler2011}。これは、物理法則として満たすべき以下の不変性を保証するためである。
+
+\begin{enumerate}
+\item \textbf{並進不変性}: 系全体を平行移動してもエネルギーは変わらない。
+\item \textbf{回転不変性}: 系全体を回転させてもエネルギーは変わらない。
+\item \textbf{置換不変性}: 同じ元素種の原子を入れ替えてもエネルギーは変わらない。
+\end{enumerate}
+これらの不変性を満たしつつ、各原子の局所環境を一意に記述するために、Behler-Parrinello型のHDNNPでは主に以下の2種類の関数が用いられる。
+
+\begin{itemize}
+\item \textbf{2体項 ($G^2$)}: 中心原子 $i$ と周辺原子 $j$ の距離 $R_{ij}$ の分布をガウス関数で記述する。
+\begin{equation}
+ G_i^{2} = \sum_{j \neq i} e^{-\eta (R_{ij} - R_s)^2} \cdot f_c(R_{ij}) 
+\end{equation}
+\item \textbf{3体項 ($G^3$)}: 中心原子 $i$ と2つの近接原子 $j, k$ が成す角度 $\theta_{ijk}$ の分布を記述する。
+\begin{equation}
+ G_i^{3} = 2^{1-\zeta} \sum_{j, k \neq i} (1 + \lambda \cos \theta_{ijk})^\zeta \cdot e^{-\eta (R_{ij}^2 + R_{ik}^2 + R_{jk}^2)} \cdot f_c(R_{ij})f_c(R_{ik})f_c(R_{jk}) 
+\end{equation}
+\end{itemize}
+
+ここで、$f_c(R_{ij})$ はカットオフ関数であり、ある半径 $R_{cut}$ 以遠の相互作用を滑らかに0にする役割を持つ。これらの記述子を組み合わせることで、各原子の局所環境を指紋のように一意かつ高次元ベクトルとして表現し、次節で述べるニューラルネットワークへの入力とする。
+
+\subsection{ニューラルネットワークの構成}
+各原子の局所エネルギー $E_i$ は、前節の対称性関数ベクトルを入力とするフィードフォワード型ニューラルネットワークによって算出される。ここで、説明のための単純化されたモデルとして、入力層2ノード、隠れ層2層（各3ノード）、出力層1ノードを持つ「2-3-3-1構造」の模式図を図\ref{fig:nn_structure_2331}に示す。
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=7cm]{experiments/results_thesis/figures/hdnnp_structure_2_3_3_1.png}
+  \caption{ニューラルネットワークの構造模式図（2-3-3-1構造の例）。入力層の信号（対称性関数値）は、隠れ層のノードを経て非線形変換され、最終的に出力層から原子エネルギーとして出力される。}
+  \label{fig:nn_structure_2331}
+\end{figure}
+
+ネットワーク内の各ノードでは、前層からの入力信号の重み付き和に対してバイアスを加算し、活性化関数による変換を行う演算が実行される。例えば、第1隠れ層の第 $i$ ノードへの入力信号の伝播は以下の式で表される。
+
+\begin{equation}
+ h_{i}^{1} = f_{i}^{1} \left( \sum_{j=1}^{2} w_{ji}^{01} x_{j} + b_{i}^{1} \right)
+\end{equation}
+
+ここで、$x_j$ は入力層の信号（対称性関数）、$w_{ji}^{01}$ は入力層ノード $j$ から第1隠れ層ノード $i$ への重み係数、$b_{i}^{1}$ はバイアス項、$f_{i}^{1}$ は活性化関数（一般には $\tanh$ 等）である。この演算が層を重ねるごとに繰り返され、最終的な出力 $y$（すなわち原子エネルギー $E_i$）が得られる。2-3-3-1構造全体での演算プロセスは、以下の入れ子関数として記述できる。
+
+\begin{equation}
+ y = f_{1}^{3} \left[ \sum_{l=1}^{3} w_{l1}^{23} f_{l}^{2} \left\{ \sum_{k=1}^{3} w_{kl}^{12} f_{k}^{1} \left( \sum_{j=1}^{2} w_{jk}^{01} x_{j} + b_{k}^{1} \right) + b_{l}^{2} \right\} + b_{1}^{3} \right]
+\end{equation}
+
+ニューラルネットワークの学習は、第一原理計算によって得られた参照データのエネルギーおよび原子に働く力と、このネットワークによる予測値との誤差（損失関数）を最小化するように、重み $w$ とバイアス $b$ のパラメータ群を最適化する過程である。学習が収束することで、HDNNPは未知の構造に対しても高精度なエネルギー予測が可能となる。
+
+\subsection{HDNNPにおける力の算出}
+HDNNPでは、各原子ネットワークの出力層で直接得られる量は原子エネルギー $E_i$ であり、力そのものではない。まず全エネルギーは
+\begin{equation}
+ E_{\text{total}} = \sum_{i=1}^{N} E_i
+\end{equation}
+として原子寄与の総和で計算される。次に、原子 $a$ に働く力 $\mathbf{F}_a$ は、全エネルギーの原子位置 $\mathbf{R}_a$ に関する負の勾配として定義される。
+\begin{equation}
+ \mathbf{F}_a = -\frac{\partial E_{\text{total}}}{\partial \mathbf{R}_a}
+ = -\sum_{i=1}^{N}\frac{\partial E_i}{\partial \mathbf{R}_a}
+\end{equation}
+ここで重要なのは、原子 $a$ の座標変化は中心原子 $a$ 自身の $E_a$ だけでなく、カットオフ半径内で $a$ を近傍に含む他原子 $i$ のエネルギー $E_i$ にも影響する点である。したがって、力の計算では「全エネルギーに対する微分」の形で、結果として全原子寄与の和が必要となる。
+
+実装上は、各 $E_i$ は対称性関数 $\mathbf{G}_i$ を介して原子座標に依存するため、連鎖律により
+\begin{equation}
+ \frac{\partial E_i}{\partial \mathbf{R}_a}
+ = \sum_{m}\frac{\partial E_i}{\partial G_{i,m}}\frac{\partial G_{i,m}}{\partial \mathbf{R}_a}
+\end{equation}
+と分解して評価する。すなわち、ニューラルネットワークの逆伝播で得られる $\partial E_i/\partial G_{i,m}$ と、対称性関数の幾何学微分 $\partial G_{i,m}/\partial \mathbf{R}_a$ を組み合わせることで、各原子に働く力を一貫的に算出できる。
+
+
+
+\section{先行研究の課題と本研究の目的}
+
+\subsection{直面する課題：外挿性と系統誤差}
+HDNNPを含むMLIPの最大の弱点は「外挿性」にある\cite{behler2015}。ここで、\textbf{内挿}とは訓練データに含まれる原子環境の近傍（既知の領域）に対して予測を行うことを指し、\textbf{外挿}とは訓練データの分布から著しく外れた未知の構造や環境に対して予測を行うことを指す。ニューラルネットワークは内挿領域に対しては極めて高い再現性を示すが、外挿領域に対しては、物理的に正しくない予測を行うリスクがある。この問題は、MLIPコミュニティにおいて広く認識されており、品質管理の重要な課題として位置づけられている。
+
+先行研究において、単位胞当たり20個の結晶学的に非等価なサイトを持つ単斜晶構造の合金\ce{Al13Fe4}の20個のサイトのうち、1サイトをPt原子に置換し構造緩和計算を行った構造20個を訓練データとして用いてHDNNPを構築した。
+続いて、単位胞の大きさを$b$軸方向に2倍に拡大した構造（単位胞当たり204原子）にPt原子を1つ置換した構造20個を用いて外挿性能を検証した。
+その結果、訓練データに対しては高い精度（低いRMSE）で学習が収束したにもかかわらず、より大きなスーパーセルである検証用データのエネルギーを予測させたところ、DFT計算値と比較して無視できない\textbf{系統的な誤差} が生じることが明らかになった（図\ref{fig:saruya_systematic_error}）。
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=10cm]{saruya_testRMSE.png}
+  \caption{テストデータの構造番号と1原子当たりのエネルギーの関係（出典：猿谷隆祐 修士論文「二元合金系に対する高次元ニューラルネットワークポテンシャルの構築」図12\cite{saruya_thesis}）。横軸はテストデータの構造番号、縦軸は1原子当たりのエネルギーを表す。オレンジ色のプロットはNNによる予測値、青色のプロットはVASPによる計算結果を示す。}
+  \label{fig:saruya_systematic_error}
+\end{figure}
+これは、スーパーセル化によって生じた長距離秩序の変化や、訓練用の小セルでは現れなかった特定の局所原子配置（ローカルな歪みや特定の元素ペアの距離感）が、HDNNPにとって「未知の環境」として認識された、あるいは訓練データ内の表現が不十分であったことに起因すると考えられる。これを解決するための一般的な手法である「MDシミュレーションによるアクティブラーニング」は、テストデータ等のターゲット構造が大規模化・複雑化するにつれて計算コストが爆発的に増大するという課題を抱えている\cite{podryabinkin2017}。
+
+\subsection{本研究の目的：キーモチーフ指向データ拡張}
+本研究の目的は、先行研究のAl-Fe-Pt合金系において見られたような、訓練データと適用先データの間のギャップに起因する予測精度の低下を解消し、高い外挿能力を持つHDNNP構築手法を確立することである。
+
+そのために、従来のような「MDを実行して不確実な構造を探す」という受動的かつ高コストなアプローチではなく、\textbf{「予測誤差の原因となっている局所構造（キーモチーフ）を特定し、それを選択的に含むデータを能動的に設計・生成する」} という新しいアプローチである \textbf{「キーモチーフ指向データ拡張 (Key Motif-Directed Data Expansion)」} を提案する。
+本手法は、ターゲットとなる構造（テストデータ）と現状の訓練データの間の「カバーギャップ」を定量的に分析し、そのギャップを埋めるための最小限かつ効果的な「代理構造」を、MDシミュレーションを経ずに自動設計することを特徴とする。これにより、最小限の計算コストで、ターゲット構造に対する予測精度を効率的に向上させることを目指す。
+
+\textbf{本研究の新規性は以下の3点に集約される：}
+
+\begin{enumerate}
+\item \textbf{統計的に最適なカバーギャップ検出}: 島崎・篠本法\cite{shimazaki2007}をRDF/ADFのヒストグラム作成に適用し、データ駆動で最適なビン幅（ヒストグラムを作成する際の区間の幅）を決定することで、客観的かつ高感度なギャップ検出を実現した。
+\item \textbf{MDシミュレーションを経由しない構造設計}: 従来のアクティブラーニングがMDによる偶発的なサンプリングに依存するのに対し、本手法はカバーギャップとエラー原因を直接分析し、キーモチーフを能動的に設計する。
+\item \textbf{体系的な代理構造ジェネレータ}: 結晶学的知識に基づく多様な構造テンプレート（FCC、BCC、HCP、金属間化合物、TCP相、ラーベス相等）に対し、格子定数変形・歪み印加・ランダム変位を組み合わせた構造生成手法と、キーモチーフ密度に基づくスコアリング関数による効率的な選抜機構を実装した。
+\end{enumerate}
+
+\chapter{キーモチーフ指向データ拡張（Key Motif-Directed Data Expansion）}
+
+\section{手法の概要}
+
+\subsection{従来のアクティブラーニングの限界}
+機械学習ポテンシャルの精度向上、特に外挿性の改善においては、「アクティブラーニング（能動学習）」が標準的なアプローチとして知られている\cite{settles2009}。その代表的な手法は、学習済みのモデルを用いて分子動力学（MD）シミュレーションを実行し、その過程でモデルの予測不確実性が高い構造をサンプリングしてDFT計算を行い、訓練データに追加するというプロセスである。
+
+しかし、この「HDNNP-MDによるサンプリング」には、本質的な課題が存在する。
+第一に、ターゲットとなる構造（テストデータ）が大規模・複雑化するにつれて、MDによる探索空間が爆発的に広がり、予測誤差の原因となる重要な局所構造（レアな原子配置など）に偶然遭遇する確率が低下することである。結果として、有効なデータを収集するために膨大な計算コストを要することになる。
+第二に、予測精度が低く信頼性が乏しい初期段階のポテンシャルでMDを実行すること自体の不安定さである。非物理的な力が生じ、シミュレーションが発散するなど構造的な不安定性が生じるケースが少なくない。
+
+
+
+\subsection{提案手法のアプローチ：4ステップサイクル}
+上記の課題を解決するため、本研究ではMDシミュレーションに依存しない、新たなデータ拡張手法「キーモチーフ指向データ拡張」を提案する。
+本手法は、ターゲットとなる構造（テストデータ）と現状の訓練データの間の統計的な乖離を定量的に分析し、予測誤差の要因となっている局所構造（キーモチーフ）を直接特定する。そして、そのモチーフを効率的に含む小さな「代理構造（Surrogate Structure）」を、結晶学的知識と幾何学的なアルゴリズムを用いて自動生成（Generative Design）する。
+
+提案手法は以下の4つのステップからなるサイクルで構成される。
+
+\begin{enumerate}
+\item \textbf{分析}: 訓練データとテストデータのRDF, ADFを比較し、「カバーギャップ」を特定する。
+\item \textbf{抽出}: 外挿原子の環境を解析し、重点的に学習すべき「キーモチーフ」を定義する。
+\item \textbf{設計}: キーモチーフを高密度に含む、計算コストの低い代理構造を自動生成・選抜する。
+\item \textbf{追加と再学習}: 代理構造のDFT計算結果を訓練データに追加し、HDNNPを更新する。
+\end{enumerate}
+
+\begin{table}[tb]
+  \centering
+  \caption{アクティブラーニング手法の比較}
+  \label{tab:active_learning_comparison}
+  \small
+  \resizebox{\textwidth}{!}{
+  \begin{tabular}{cccc}
+    \toprule
+    手法 & 構造探索方法 & 計算コスト & ターゲット構造への直接的設計 \\
+    \midrule
+    MDベースの手法 & MD軌道に依存（偶発的） & 高 & $\times$ \\
+    \textbf{本研究（キーモチーフ指向）} & RDF/ADF分析による直接設計 & \textbf{低} & $\bigcirc$ \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=12cm]{experiments/results_thesis/figures/method_flowchart.png}
+  \caption{提案手法（キーモチーフ指向データ拡張）の4ステップサイクルのフローチャート}
+  \label{fig:method_flowchart}
+\end{figure}
+
+このサイクルを回すことで、HDNNPはターゲット構造に必要な原子環境をピンポイントで学習し、最小限のDFT計算コストで効率的に外挿精度を向上させることができる。
+
+\section{分析: カバーギャップの特定}
+
+手法の第一歩は、現在の訓練データがターゲット（テストデータ）のどのような局所環境をカバーできていないかを明らかにすることである。これを「カバーギャップ分析」と呼ぶ。
+
+\subsection{動径分布関数（RDF）と角度分布関数（ADF）の採用とその理由}
+一般的に、この種のカバレッジ分析では「記述子（対称性関数）空間上での分布比較」が行われることが多い。しかし、本研究ではあえて記述子ではなく、より直接的な幾何学的指標である \textbf{動径分布関数 (RDF)} と \textbf{角度分布関数 (ADF)} を用いて分布の直接比較を行う。これには以下の明確な理由がある。
+
+\begin{enumerate}
+\item \textbf{対称性関数との直接的な対応}: Behler-Parrinello型HDNNPで使用される対称性関数（$G^2, G^3$）は、数式上、原子間距離 $r_{ij}$ と結合角 $\theta_{ijk}$ の関数として定義されている。したがって、構造的な違い（RDF/ADFの違い）は必然的に入力特徴量（$G$ベクトル）の違いとして現れ、それが最終的なエネルギー予測の誤差に直結する。
+\item \textbf{物理的解釈の容易さ}: 高次元の記述子空間での「隙間」を特定しても、それがどのような原子配置に対応するのかを逆推定することは困難である。一方、RDF/ADF上の「距離 $r$ の欠落」や「角度 $\theta$ の欠落」であれば、具体的な原子配置（例：特定の原子ペアが近づきすぎている、あるいは特定の角度が不足している）として直感的に理解し、次の「設計」フェーズへ直接フィードバックすることが可能となる。
+\end{enumerate}
+
+\subsection{分布の比較とヒストグラム作成 (Shimazaki-Shinomoto Method)}
+訓練データセット $\mathcal{D}_{train}$ とテストデータセット $\mathcal{D}_{test}$ のそれぞれについて、以下のヒストグラムを作成する。
+
+\begin{itemize}
+\item \textbf{RDF (Radial Distribution Function)}: すべての原子ペア（例: \ce{Al-Al}, \ce{Al-Fe}, \ce{Fe-Pt}など）について、原子間距離 $r$ の分布 $g(r)$ を計算する。
+\item \textbf{ADF (Angular Distribution Function)}: すべての原子トリプレット（\ce{Al-Fe-Al}, \ce{Pt-Al-Fe}など）について、結合角 $\theta$ の分布 $P(\theta)$ を計算する。
+\end{itemize}
+
+ヒストグラムを作成する際、ビン幅（階級の幅）の決定は極めて重要である。そこで本研究では、\textbf{島崎・篠本の方法} \cite{shimazaki2007}を採用した。この手法は、観測データから背後にある確率密度関数を推定する際の平均二乗誤差を最小化するように、最適なビン幅 $\Delta$ をデータ駆動で決定するものである。
+コスト関数 $C(\Delta) = \frac{2\bar{k} - v}{\Delta^2}$ （ここで $\bar{k}$ は各ビンの平均度数、$v$ は度数の分散）を最小化する $\Delta$ を選択することで、データの粗密に依存せず、客観的かつ「統計的に最も情報損失の少ない」ヒストグラムを作成することが可能となる。なお、ここでいう「ビン幅（Bin Width）」とは、連続的な値をとる原子間距離や角度をヒストグラム化（離散化）する際に、どの程度の区間幅でデータを区切るかを表すパラメータである。ビン幅が大きすぎると分布の詳細な特徴（ピークなど）が失われ、逆に小さすぎるとノイズまで拾ってしまうため、この最適化は重要である。これにより、わずかな分布の違い（カバーギャップ）であっても、バイアスなく検出することができる。
+
+\subsection{カバーギャップの定義}
+あるペアまたはトリプレット $k$ における、最適化されたビン $i$ ごとの頻度（密度）をそれぞれ $d_{train}^{(k,i)}, d_{test}^{(k,i)}$ とする。
+このとき、テストデータの密度が訓練データを明確に上回っている領域、すなわち
+
+\begin{equation}
+ \label{eq:gap_def}
+ \Delta^{(k,i)} = d_{test}^{(k,i)} - d_{train}^{(k,i)} > 0 
+\end{equation}
+
+となる区間を「カバーギャップ」と定義する。この $\Delta^{(k,i)}$ の大きさは、その局所構造がテスト環境において頻出するにもかかわらず、訓練データセットにおいては学習機会が不足している度合いを定量的に表している。
+
+\section{抽出: キーモチーフの特定}
+
+分析フェーズで特定されたカバーギャップの中から、実際にHDNNPの予測精度を悪化させている「真に重要な」局所構造を選別し、「キーモチーフ」として定義する。ここで「モチーフ」とは、特定の原子対間の距離（例：Fe-Pt間距離）や3つの原子が成す結合角（例：Fe-Pt-Fe角度）などの局所的な幾何学パターンのことを指す。その中でも特に外挿の原因となっている重要なパターンを「キーモチーフ」と呼ぶ。
+
+\subsection{外挿原子の検出}
+学習済みのHDNNPを用いてテストデータに対する推論を行い、対称性関数の値が訓練データの範囲（最小値〜最大値）を逸脱している原子を「外挿原子 (Outlier Atoms)」として特定する。
+これら外挿原子は、HDNNPが「見たことのない環境」に置かれている原子であり、予測誤差の主因となっている可能性が高い。
+
+\subsection{モチーフスコアリング}
+特定された外挿原子 $a$ の周囲の局所環境（近接原子との距離や角度）を解析し、それが分析フェーズで見つかったカバーギャップに該当するかを照合する。以下の式に基づいて、各モチーフ（距離範囲や角度範囲）の重要度スコア $S(m)$ を算出する。
+
+\begin{equation}
+ \label{eq:motif_score}
+ S(m) = \sum_{a \in Outliers} \sum_{g \in Geometry(a)} \mathbb{I}(g \in range(m)) \cdot \text{Difference}(m) 
+\end{equation}
+
+ここで、$Geometry(a)$ は外挿原子 $a$ が形成する幾何構造（すなわち、原子$a$を中心とした周囲の原子との原子間距離や角度の集合）、$\mathbb{I}$ はその構造 $g$ がモチーフ $m$ の定義範囲（ヒストグラムにおける特定のビンの区間、例：$r_{min} \le r < r_{max}$）に含まれるかどうかの指示関数（条件を満たせば1、満たさなければ0を返す関数）である。$\text{Difference}(m)$ は、モチーフ $m$ に対応するビンにおける正規化密度の差分であり、以下のように定義される：
+
+\begin{equation}
+ \label{eq:diff_def}
+ \text{Difference}(m) = d_{test}^{(m)} - d_{train}^{(m)} 
+\end{equation}
+
+これは、テストデータにおける当該局所構造の出現頻度が訓練データを上回る度合いを表す。なお、(\ref{eq:diff_def})式にも同様の差分項が現れるが、(\ref{eq:gap_def})式が「カバーギャップそのものの定義」を示しているのに対し、(\ref{eq:diff_def})式は「そのギャップ（不足分）を重みとして用いて、モチーフの重要度をスコア化している」点で役割が異なる。
+
+つまり、\textbf{「テストデータ全体で不足しており（ギャップ大）」かつ「実際にエラーを出している原子の周囲に存在する（外挿原因）」} ような局所構造ほど高いスコアが与えられる。
+
+上位にランクインしたモチーフ（例えば、本実験で確認された \ce{Fe-Pt} 間距離 $2.64 \sim 2.65$~\AA (Score: 17.3) や、\ce{Fe-Pt-Fe} 角度 $58.2^{\circ}$ (Score: 1.68) といった具体的な数値）を、次工程で最優先に学習すべき「キーモチーフ」としてリストアップする。
+
+\section{設計: 代理構造の自動生成}
+
+抽出されたキーモチーフを含むような結晶構造を、DFT計算が可能な原子数の範囲で人工的に作り出す。これを「代理構造」と呼ぶ。本研究では、以下のテンプレートベースのアプローチで構造生成を行う。
+
+\subsection{テンプレートベース生成}
+既知の結晶構造プロトタイプを変形させることで、多様な局所環境を探索する手法である。本研究ではAl-Fe-Pt系などの合金特性を考慮し、以下のジェネレータを使用する。
+
+\begin{itemize}
+\item \textbf{基本構造}: FCC, BCC, HCP, ダイヤモンド構造などの単体元素相。
+\item \textbf{単純化合物}: NaCl型, CsCl型, Zincblende型などの二元系プロトタイプ。
+\item \textbf{金属間化合物}: L1$_2$型 ($A_3B$), L1$_0$型 ($AB$), Heusler合金 ($X_2YZ$), Half-Heusler合金 ($XYZ$) など、本系で安定または準安定になりうる構造群。
+\item \textbf{特殊構造}: 先行研究等で報告されているAl-Fe-Pt系の安定相や、C14 (Laves) 相、$\sigma$相 (TCP) などの複雑合金相からの派生構造。
+\end{itemize}
+
+これらのテンプレートに対し、以下の操作を組み合わせて候補構造を大量に生成する。
+\begin{enumerate}
+\item \textbf{格子定数のスキャン}: 格子定数 $a$ を広範囲（例: 2.5--7.0~\AA）かつ細かい刻み幅で変化させる。
+\item \textbf{元素置換}: サイトに対する元素（Al, Fe, Pt）のあらゆる組み合わせを試行する。
+\item \textbf{ひずみ印加}: セルに対して一軸圧縮・引張やせん断ひずみを加えることで、対称性を崩し、平衡距離からずれたペア距離を生成する。
+\item \textbf{ランダム変位}: 原子位置を微小にランダムにずらすことで、完全結晶には存在しない角度分布を作り出す。
+\end{enumerate}
+
+
+
+\subsection{代理構造の選抜}
+上記の手法によって生成された数千〜数万の候補構造の中から、DFT計算に回す「代理構造」を選抜する。
+各候補構造 $S$ に対して、その中に含まれるキーモチーフの密度に基づくスコアを計算する。
+
+\begin{equation}
+ \label{eq:final_score}
+ \text{Final Score} = \frac{\text{Score}_{\text{motif}}}{N_{\text{atoms}}} - P_{\text{dist}} - P_{\text{energy}}
+\end{equation}
+
+ここで、$\text{Score}_{\text{motif}}$ は構造内に含まれるキーモチーフのスコア総和（$\sum_{m \in Motifs} N_{m}(S) \cdot S(m)$）である。なお、$N_m(S)$はその構造$S$の中にモチーフ$m$（特定の距離や角度の条件を満たす原子対や三つ組）がいくつ存在するかを表す個数である。
+$P_{\text{dist}}$ は原子間距離ペナルティであり、原子ペア $i, j$ 間の距離 $d_{ij}$ が許容最小距離 $d_{\text{min}}$（各原子の共有結合半径の和の85\%）を下回った場合に、以下のように算出される。
+\begin{equation}
+ d_{\text{min}} = 0.85 \times (r_{\text{cov}, i} + r_{\text{cov}, j}), \quad P_{\text{dist}} = \sum_{d_{ij} < d_{\text{min}}} 50 \cdot (d_{\text{min}} - d_{ij})^2
+\end{equation}
+なお、ここで用いている係数 50 は、予備実験において数値的な安定性とペナルティの効き具合を考慮して決定した経験的なパラメータである。
+
+また、$P_{\text{energy}}$ はエネルギーペナルティであり、1原子あたりのエネルギー $E_{\text{atom}}$ が正（不安定）の場合に適用される。
+\begin{equation}
+ P_{\text{energy}} = \max(0, E_{\text{atom}}) \cdot 50.0
+\end{equation}
+
+このスコアが高い上位の構造（典型的には数個〜数十個）のみを、最も効率的な学習データ候補として採用する。
+
+\section{追加と再学習}
+
+選定された代理構造（POSCAR形式）に対してDFT計算（VASP）を実行し、構造緩和を行わない計算（Single Point Calculation）によってエネルギーと力を算出する。得られたデータを既存の訓練データセットにマージし、\textbf{モデルの重みを初期化した上で}HDNNPの再学習を行う。これにより、前のサイクルの局所解の影響を排除し、拡張されたデータセット全体に対して最適なポテンシャル曲面を探索する。
+
+\chapter{実験方法・計算条件}
+
+\section{対象系とデータセット}
+
+\subsection{対象系：\ce{Al-Fe-Pt}三元系合金}
+本研究では、\ce{Al-Fe-Pt}三元系合金を対象とする。特に、複雑金属間化合物の一つである \ce{Al13Fe4} 相に対し、Feサイトの一部をPtで置換したドープ系（\ce{Al13(Fe_{1-x}Pt_x)4}）は、優れた触媒特性や磁気特性を示す可能性があり、工業的にも注目されている。
+この系は単位胞内の原子数が多く（純粋な\ce{Al13Fe4}で102原子）、かつ元素置換による組成自由度が高いため、第一原理計算のみで特性を網羅的に探索することは困難である。したがって、HDNNPによる高速なスクリーニングが強く求められている領域である。
+
+\subsection{データセット構成}
+\begin{itemize}
+\item \textbf{訓練データ ($\mathcal{D}_{train}^{(0)}$)}: 
+    \ce{Al13Fe4}の基本構造にPt原子を1つドープした構造を用いた。Pt置換サイトの違いにより全20個の構造データで構成され、組成は\ce{Al77Fe24Pt}および\ce{Al78Fe23Pt}である。
+\item \textbf{テストデータ ($\mathcal{D}_{test}$)}: 
+    \ce{Al13Fe4}の基本構造を$b$軸方向に2倍に拡張したスーパーセル構造にPt原子を1つドープした構造を用いた。置換サイトの違いにより全20個の構造データで構成され、組成は\ce{Al155Fe48Pt}および\ce{Al156Fe47Pt}である。
+\end{itemize}
+なお、データ数は比較的少数であるが、本研究では特定の結晶構造に基づいた限定的な構造変化を対象としているため、評価を行う上で十分な量であると判断した。
+
+\section{詳細計算条件}
+
+\subsection{第一原理計算 (DFT)}
+すべての参照データ（エネルギーおよび原子にかかる力）の計算には、平面波基底を用いた密度汎関数法（DFT）コードである \textbf{VASP (Vienna Ab initio Simulation Package)} を使用した。
+これらの計算により、高精度なポテンシャル構築および性能評価に不可欠な訓練データおよびテストデータを生成した。
+
+\subsection{HDNNP構築}
+HDNNPの構築および学習には、PyTorchベースの内製コードを使用した。
+
+\begin{itemize}
+\item \textbf{対称性関数 (Symmetry Functions)}:
+    Behler-Parrinello型の動径関数 ($G^2$) および角度関数 ($G^3$) を使用した。
+    \begin{itemize}
+    \item カットオフ半径 ($R_c$): \textbf{4.0~\AA}
+    \item $G^2$ パラメータ ($\eta$): $[0.01, 0.05, 0.1]$ ($R_s=0$)
+    \item $G^3$ パラメータ ($\eta, \zeta, \lambda$): $\eta \in [0.01, 0.1], \zeta \in [1.0, 4.0], \lambda \in [1, -1]$
+    \item これにより、各元素の局所環境を高次元ベクトルとして記述した。
+    \end{itemize}
+\end{itemize}
+
+\begin{itemize}
+\item \textbf{ニューラルネットワーク構造}:
+    各元素 (Al, Fe, Pt) ごとに独立した全結合ニューラルネットワーク (Element-wise NN) を構築した。
+    \begin{itemize}
+    \item 隠れ層: \textbf{2層}
+    \item 各層のニューロン数: \textbf{60 ノード}
+    \item 活性化関数: \textbf{Tanh}
+    \end{itemize}
+\end{itemize}
+
+\begin{itemize}
+\item \textbf{学習パラメータ}:
+    \begin{itemize}
+    \item 最適化手法: \textbf{L-BFGS}
+    \item 学習率: 0.1
+    \item 最大エポック数 (Iterations): 200
+    \item 損失関数: エネルギー誤差 ($E$) と力誤差 ($F$) の重み付き和を最小化した。本研究では、エネルギーと力の重み係数をそれぞれ $\alpha=1.0, \beta=1.0$ と設定し、以下の損失関数$L$を用いた。
+    \begin{equation}
+        L = \alpha \frac{1}{N_{data}} \sum_{i=1}^{N_{data}} \left( E_{NN}^{(i)} - E_{DFT}^{(i)} \right)^2 + \beta \frac{1}{3 N_{atoms}} \sum_{j=1}^{3 N_{atoms}} \left( F_{NN}^{(j)} - F_{DFT}^{(j)} \right)^2
+    \end{equation}
+    \item \textbf{過学習抑制}: 検証データの損失が10エポック連続で改善しない場合に学習を終了するEarly Stopping機構を導入した。
+    \end{itemize}
+\end{itemize}
+
+\section{評価指標}
+
+構築したHDNNPの精度評価には、DFT計算値に対する\textbf{二乗平均平方根誤差 (RMSE: Root Mean Square Error)} を用いた。
+
+\begin{itemize}
+\item \textbf{Energy RMSE}: 1原子あたりのエネルギー誤差 (eV/atom)
+\begin{equation}
+ \text{RMSE}_E = \sqrt{ \frac{1}{N_{\text{data}}} \sum_{i=1}^{N_{\text{data}}} \left( \frac{E_{\text{HDNNP}}^{(i)} - E_{\text{DFT}}^{(i)}}{N_{\text{atoms}}^{(i)}} \right)^2 } 
+\end{equation}
+
+\item \textbf{Force RMSE (eV/\AA)}: 各原子にかかる力の各成分 ($x, y, z$) の誤差 (eV/\AA)
+\begin{equation}
+ \text{RMSE}_F = \sqrt{ \frac{1}{3 N_{\text{total\_atoms}}} \sum_{j=1}^{3 N_{\text{total\_atoms}}} (F_{\text{HDNNP}}^{(j)} - F_{\text{DFT}}^{(j)})^2 } 
+\end{equation}
+ここで、和のインデックス$j$は、全データ内の全原子における$x, y, z$各成分全てを走る。
+\end{itemize}
+
+最終的なモデル性能は、学習に使用していないテストデータ (Test) に対するRMSEで評価した。
+
+
+\chapter{結果}
+
+\section{実験概要と評価設定}
+
+本研究で提案した「キーモチーフ指向データ拡張手法」の有効性を検証するため、追加するデータ（代理構造）の選択戦略が最終的なHDNNPの外挿性能に与える影響を系統的に評価した。
+なお、本章以降で示される誤差（Energy RMSE, Force RMSE）および外挿性の評価（外挿原子数）は、特記しない限りすべてテストデータに対する結果である。
+
+実験では、初期訓練データのみで構築したモデル（Cycle 0）を出発点とし、各戦略に基づいて生成・選抜された代理構造を追加学習させ、その都度テストデータ（\ce{Al155Fe48Pt}および\ce{Al156Fe47Pt}）に対する予測精度を計測した。
+
+比較対象とした選択戦略は以下の4種類である。各戦略の概念的な差異を図\ref{fig:strategy_schematic}に示す。
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=12cm]{experiments/results_thesis/figures/strategy_comparison_venn.png}
+  \caption{能動的データ選択戦略（Gap Only, Outlier Only, Key Motif）の概念比較（ベン図）。各戦略がターゲットとする構造空間の領域（Outlier Surroundings vs Coverage Gap）の違い、およびKey Motif（交差領域）の定義を示す。Random Expansionは比較のベースラインとして用いるため、図中には含まれていない。}
+  \label{fig:strategy_schematic}
+\end{figure}
+
+戦略の詳細を述べる前に、各戦略において共通で使用されるスコア算出式の役割を整理する。代理構造の選抜に用いられる式Eq.(\ref{eq:final_score})は、構造全体のスコアを決定するものであるが、その内部には個々の局所構造（モチーフ）の重要度を評価する式Eq.(\ref{eq:motif_score})が含まれている。
+本比較実験における各戦略の相違点は、全スコア計算の根幹となる「モチーフごとの重要度算出式（Eq.(\ref{eq:motif_score})）」の定義をどのように変更するかにある。
+
+\begin{enumerate}
+    \item \textbf{Key Motif (提案手法)}: Eq.(\ref{eq:motif_score})を原定義の通り適用する戦略である。すなわち、あるモチーフ$m$の重要度スコアを、予測誤差の原因となる外挿度（$\mathbb{I}(g \in \mathrm{range}(m))$）と、構造空間の未探索度（$\text{Difference}(m)$）の積として定義する。これに基づき算出された総モチーフスコアを用いて、Eq.(\ref{eq:final_score})により代理構造全体を評価・選抜する。
+    \item \textbf{Gap Only}: 予測誤差の所在（外挿度）を考慮せず、構造空間全体における未探索領域（カバーギャップ）の解消を最優先とする戦略である。すなわち、Eq.(\ref{eq:motif_score})における外挿度項を無視し、$\text{Difference}(m)$ （訓練データとテストデータの全体的な分布差）のみでモチーフスコアを定義する。この変更されたモチーフスコアを用いてEq.(\ref{eq:final_score})を計算する。
+    \item \textbf{Outlier Only}: データセット全体の分布比較（カバーギャップ）を行わず、予測誤差が顕在化している外挿原子（Outlier）の局所環境のみに注視する戦略である。Eq.(\ref{eq:motif_score})における$\text{Difference}(m)$ 項を無視し、外挿原子周辺で観測された局所構造の出現頻度のみに基づいてモチーフスコアを定義する。
+    \item \textbf{Random Expansion}: 構造生成および選択に能動学習的な指標（モチーフスコア）を用いず、構造テンプレートによって生成された候補構造プールから、スコアに関係なくランダムに代理構造を選択して追加するベースライン手法。
+\end{enumerate}
+
+
+
+比較実験において、Random Expansionを除く各戦略では、構造選択スコアが高い順に代理構造を選択した。その上で、1サイクルに追加する構造数 $N$ を $1$ から $10$ までの計10パターンに変化させて学習を行い、テストデータに対するエネルギーおよび力のRMSE、ならびに外挿原子数（Outlier Count）の推移を追跡した。
+
+\section{提案手法（Key Motif）による外挿精度の向上}
+
+まず、提案手法の標準設定である \textbf{Key Motif} 戦略における結果について述べる。表\ref{tab:numeric_trends} に、追加構造数 $N$ に対するテストデータへの汎化性能の推移を示す。同表には、各戦略について、Energy RMSE (meV/atom)、Force RMSE (eV/\AA)、および外挿原子数 (Outliers) の平均値と標準偏差を記載した。
+
+初期状態（$N=0$）のHDNNPは、大きな予測誤差（Energy RMSE $>$ 40 meV/atom）を示し、多数の外挿原子が検出された。
+
+これに対し、Key Motif戦略を用いて生成された代理構造を追加学習させた結果、予測精度は大幅な改善を見せた。特筆すべきは、わずかな構造追加（$N=4$）で、Energy RMSEが平均 \textbf{3.97~meV/atom} まで低下した点である。これは第一原理計算の精度限界に匹敵する値であり、効率的な学習を裏付けている。さらに、追加構造数 $N=5$ 以降では外挿原子数が平均 \textbf{0.8} 個以下となり、モデルがテストデータ内のほぼ全ての原子環境を既知の領域として正しく認識できるようになったことが確認された。
+
+\input{experiments/results_thesis/tables/numeric_trends.tex}
+
+特に、Key Motif戦略において最も高い精度を達成した試行の結果（Run 3、追加構造数3、Energy RMSE 1.59~meV/atom）を図\ref{fig:keymotif_best_energy}に示す。
+第1章の図\ref{fig:saruya_systematic_error}（先行研究）と比較すると、先行研究では予測値がDFT計算値に対して系統的にずれていたのに対し、本研究の結果ではHDNNPによる予測値（赤色）がVASPによる計算値（青色）と極めて高い精度で一致していることが確認できる。
+これは、キーモチーフ指向データ拡張によって、外挿領域における未知の局所環境が的確に学習され、先行研究の課題であった系統誤差の問題が解決されたことを示している。
+
+図4.2および表\ref{tab:numeric_trends}を見ると、Key Motif戦略では追加初期に誤差が急減し、Run 3では$N=3$でEnergy RMSEが最小（1.59~meV/atom）となる。一方で、それ以上追加しても一貫した改善は続かず、試行によってはわずかに悪化する。これは、最初の数回の更新で主要な外挿環境がすでに学習され、以降に追加される構造が既存データと部分的に重複して情報利得が小さくなるためと考えられる。さらに、学習データが増えると最適化対象の分布が広がるため、ある領域での改善が別の領域での誤差増加として現れる場合がある。したがって本研究では、「更新回数を増やすほど必ず高精度になる」とは解釈せず、図4.2に示す誤差の底とその後の停滞を、十分学習したことを示す実験的根拠として判断した。
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=10cm]{experiments/results_thesis/figures/metrics_0_energy_vs_structure_test_infer.png}
+  \caption{Key Motif戦略適用後のテストデータに対するエネルギー予測結果（最良モデル：Run 3, 追加構造数3）。横軸はテストデータの構造番号、縦軸は1原子当たりのエネルギーを表す。赤色のプロットはHDNNPによる予測値、青色のプロットはVASPによる計算結果を示す。Energy RMSEは1.59~meV/atomを達成しており、図\ref{fig:saruya_systematic_error}で見られた先行研究の系統誤差が解消されている。}
+  \label{fig:keymotif_best_energy}
+\end{figure}
+
+\section{選択戦略の比較分析}
+
+本節では、4つのデータ選択戦略（Key Motif, Gap Only, Outlier Only, Random Expansion）による検証実験の結果を比較し、各戦略の有効性を議論する。図\ref{fig:energy_rmse}、図\ref{fig:force_rmse}、および図\ref{fig:outliers}に、それぞれの戦略におけるテストデータのEnergy RMSE、Force RMSE、および外挿原子数の推移を示す。なお、Random Expansionについては、他の3戦略と比較して誤差が大きく変動も激しいため、グラフの視認性を考慮してこれらの図からは除外している。
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=10cm]{experiments/results_thesis/figures/energy_rmse__top_comparison.png}
+  \caption{各戦略における追加構造数 $N$ とテストデータのEnergy RMSEの関係}
+  \label{fig:energy_rmse}
+\end{figure}
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=10cm]{experiments/results_thesis/figures/force_rmse__top_comparison.png}
+  \caption{各戦略における追加構造数 $N$ とテストデータのForce RMSEの関係}
+  \label{fig:force_rmse}
+\end{figure}
+
+4つの戦略の比較検証の結果、提案手法であるKey Motif戦略は総合的に優れた性能を示した。表\ref{tab:numeric_trends}に示すように、Key Motif戦略はわずか4構造の追加（$N=4$）でEnergy RMSEを初期の 49.1 meV/atom から 3.97 meV/atom まで90\%以上低減させた。さらに、外挿原子数についても $N=5$ の時点で平均 0.8 個まで大幅に減少させており、未知の構造環境を効率的に学習できていることがわかる。
+
+一方、Gap Only戦略の挙動は、データ選択における平均精度と局所的な信頼性の間に乖離が生じ得ることを示している。力の予測精度を示すForce RMSE（図\ref{fig:force_rmse}）に注目すると、Gap Only戦略は概ね 0.09--0.12 eV/\AA 程度で推移しており、Key Motif戦略（0.10--0.20 eV/\AA）と比較しても同等、あるいはより良好な精度を示している。Energy RMSEに関しても、$N=8$ において 2.10 meV/atom という4戦略中で最小の誤差を記録している。これら平均精度の指標のみに着目すれば、Gap Only戦略は一見して有効な戦略であるように見える。
+
+しかし、信頼性の観点から「どの原子が外挿と判定されているか」を詳細に追跡すると、Gap Only戦略の重大な課題が明らかとなった。図\ref{fig:outliers}および表\ref{tab:numeric_trends}の通り、Gap Only戦略では追加する代理構造の数を増やしても、1試行あたりの外挿原子数（全20テスト構造の合計）が平均 8.0 個で減少が停滞する傾向が確認された。解析の結果、これら残存している外挿原子のうち約5個は、テストデータに用いた\ce{Al155Fe48Pt}および\ce{Al156Fe47Pt}において置換された唯一のドーパントであるPt原子およびその第一近接原子（Ptから3.0~\AA 以内に位置する原子）であることが判明した。
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=10cm]{experiments/results_thesis/figures/outliers__top_comparison.png}
+  \caption{各戦略における追加構造数 $N$ とテストデータの外挿原子数の推移}
+  \label{fig:outliers}
+\end{figure}
+
+この問題をさらに定量的に検証するため、$N=10$時点における外挿原子と非外挿原子の力予測誤差を、Ptドーパントからの距離に基づくカテゴリ別に分析した（図\ref{fig:force_error_comparison}、表\ref{tab:force_error_by_category}）。
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=10cm]{experiments/results_thesis/figures/force_error_comparison.png}
+  \caption{Gap OnlyとKey Motifにおけるテストデータの外挿原子と非外挿原子の力予測誤差（Force RMSE）比較（$N=10$、5ラン平均）。Outlier (All)は全外挿原子、Outlier (Pt 1NN)はPt第一近接（3.0~\AA 以内）の外挿原子、Non-Outlier (All)は全非外挿原子、Non-Outlier (Far)はPtから5~\AA 以遠の非外挿原子を示す。Key MotifではPt第一近接の外挿原子が存在しないため、該当する棒が表示されていない。}
+  \label{fig:force_error_comparison}
+\end{figure}
+
+\input{experiments/results_thesis/tables/force_error_by_category.tex}
+
+表\ref{tab:force_error_by_category}に示すように、Gap Only戦略における外挿原子（Pt第一近接）の力誤差は0.548~eV/\AA であり、遠方の非外挿原子（0.174~eV/\AA）と比較して約3.15倍に達した。外挿原子全体の力誤差（0.408~eV/\AA）についても非外挿原子（0.212~eV/\AA）の約1.92倍であった（図\ref{fig:force_error_comparison}）。すなわち、Gap Only戦略では平均精度が良好に見えても、Pt周辺という今回用いたテストデータの構造において材料科学上重要な領域では、力の予測精度が系統的に劣化していることが定量的に示された。
+
+一方、Key Motif戦略では1ランあたりの外挿原子数が平均0.6個まで減少しており（5ラン合計で3個、すべてPt原子自身）、Pt第一近接の外挿原子は観察されなかった。これは、材料の核心となるドーパント周辺の局所環境を確実に学習できていることを意味する。
+
+これに対し、Gap Only戦略は、たとえ系全体の平均的なエネルギーや力の誤差（RMSE）が小さくとも、材料特性を決定づける重要なドーパント周辺で局所的な予測精度が著しく低下するリスクがある。材料探索においては、平均的な数値の良さよりも、特定の重要元素周辺での予測破綻リスクを排除することが極めて重要である。
+
+さらに、Outlier Only戦略についても考察を加える。表\ref{tab:numeric_trends}によれば、Outlier Only戦略は外挿原子数の抑制において他の戦略よりも優れた特性を示している。具体的には、$N=6$の時点で外挿原子数が平均0.0個に達しており、Key Motif（0.6個）やGap Only（8.0個で停滞）と比較して、最も効率的に外挿原子を排除できている。これは、Outlier Only戦略が外挿と判定された原子の局所環境を直接的に学習対象としているためであり、外挿問題の解消という観点では最も直接的なアプローチであるといえる。
+
+しかしながら、Energy RMSEに着目すると、Outlier Only戦略には精度向上の効率性において課題が存在する。$N=10$時点でのEnergy RMSEは7.96~meV/atomであり、Key Motif（$N=4$で3.97~meV/atom）やGap Only（$N=8$で2.10~meV/atom）が達成した精度水準に到達していない。すなわち、Outlier Only戦略においてこれらの戦略と同等のEnergy RMSEまで誤差を低減させるためには、より多くの代理構造を訓練データに追加する必要があることが示唆される。これは、外挿原子周辺の局所環境のみに注視することで、データセット全体の分布バランス（カバーギャップの解消）が十分に考慮されないためであると考えられる。
+
+したがって、平均的な精度の向上のみに囚われることなく、Gap（網羅性）とOutlier（特異性）の両面を考慮して重要な局所環境を確実に学習できるKey Motif戦略こそが、実用上最も信頼性が高く、適切な戦略であると結論付けられる。
+
+
+
+
+\chapter{考察}
+\label{chap:discussion}
+
+\section{キーモチーフ指向データ拡張の物理的妥当性}
+本研究の実験結果は、機械学習ポテンシャルの構築において「構造的なデータ設計」が極めて有効であることを示唆している。
+
+従来のMDを用いたアクティブラーニングは、広大な構造探索空間の中から不確実性の高い配置を確率的にサンプリングする「探索的」プロセスに依存している。これに対し、本手法で用いたRDF/ADF差分に基づくアプローチは、既知のデータと未知のターゲットとの間の幾何学的な「構造的欠落」を直接特定するものである。Key Motif戦略がわずか数個のデータ追加で第一原理計算精度を達成した事実は、HDNNPの予測誤差が、ニューラルネットワークの表現能力不足ではなく、訓練データの構造的欠落（分布の不一致）が主因であることを強く示唆している。
+
+キーモチーフ（特定の原子間距離や角度）は、原子間相互作用の物理的な記述子（対称性関数）と直接対応している。したがって、キーモチーフを埋めることは、ポテンシャルエネルギー曲面（PES）上の情報が欠落している領域を局所的、かつ確実に修復することに相当する。これが、本手法が高いデータ効率を実現できた物理的な理由であると考えられる。
+
+
+
+\section{計算コストとスケーラビリティ}
+本手法の工学的意義は、その計算コストの大幅な削減が可能となる点にある。サンプリング過程からMDシミュレーションを排除したことで、データ拡張に必要な計算リソースは、従来法と比較して大幅に削減された。
+MD計算が不要となるため、計算リソースを最小化できるだけでなく、MD実行に伴う発散や非物理的な構造生成といった不安定性の問題も回避できることから、人為的な介入を最小化した自動化ワークフローへの実装が容易である。この特徴は、本研究で扱った三元系合金に限らず、より多くの元素を含む多元系（ハイエントロピー合金など）や、さらに複雑な界面・欠陥構造を含む系への適用に際して、極めて大きな利点となる。
+
+\chapter{結論}
+
+先行研究において、テストデータに対するHDNNPによるエネルギー予測値と、第一原理計算（VASP）による計算値との間に無視できない系統的な差が生じることが確認された。本研究では、このような「外挿問題」を解決するため、構造データの統計的分析に基づく能動的なデータ拡張手法「キーモチーフ指向データ拡張」を開発した。
+\ce{Al-Fe-Pt}三元系合金を対象とした実証実験を通じ、以下の知見を得た。
+
+\begin{enumerate}
+    \item \textbf{外挿精度の飛躍的向上}: 開発した手法を用いることで、訓練データに含まれない大規模構造に対する予測誤差（Energy RMSE）を、初期の49.1~meV/atomから3.97~meV/atom（約92\%低減）へと大幅に改善させ、第一原理計算に匹敵する精度を達成した。
+    \item \textbf{高いデータ効率}: 本手法はわずか2--5個の最適化された代理構造を追加するだけで学習を収束させた。これは、本手法がターゲット構造に必要な原子環境を選択的に設計・生成できるためである。
+    \item \textbf{信頼性を重視した戦略設計の重要性}: 選択戦略の比較分析により、平均精度が良好に見えるGap Only戦略であっても、材料の核心となるドーパント周辺の学習が不十分となるリスクが明らかになった。Key Motif戦略は、網羅性（Gap）と特異性（Outlier）の両面を考慮した、実用上信頼性の高い戦略であることを実証した。
+
+\end{enumerate}
+
+一方、今後の課題としては、代理構造の追加数 $N$ を適応的に決定する手法の開発が挙げられる。本研究では$N$を事前に固定して実験を行ったが、外挿原子数（Outlier Count）が0になる最小$N$、およびテストデータに対するRMSEが飽和する点を自動的に検出し、最適な$N$を動的に決定するアルゴリズムを実装することで、手法の汎用性と自動化がさらに向上すると期待される。
+
+本研究で確立したこの新しいデータ拡張の枠組みは、複雑金属間化合物のみならず、触媒表面反応やアモルファス材料など、従来の探索手法では良質な学習データの取得が困難であった様々な系に対し、高精度な原子シミュレーションへの道を拓く基盤技術となることが期待される。
+
+\chapter*{謝辞}
+\addcontentsline{toc}{chapter}{謝辞}
+本研究を進めるにあたり、多くの方々からご指導とご支援を賜りました。ここに深く感謝申し上げます。
+
+鹿児島大学の野澤 和生先生には、所属大学の枠を越えて毎週のゼミに参加させていただき、研究の進め方から結果の解釈に至るまで、継続的かつ本質的なご助言をいただきました。研究の方向性を明確にし、本論文をまとめる上で大きな支えとなりました。
+
+中央大学においては、石井 靖先生に、折々の面談や議論を通じて貴重なご指導を賜りました。研究全体の位置づけや学術的意義について多くの示唆をいただき、研究の質を高めることができました。
+
+ここに改めて、両先生に心より御礼申し上げます。
+
+\begin{thebibliography}{99}
+\item[] \textbf{機械学習ポテンシャル・HDNNP}
+\bibitem{behler2007} J. Behler and M. Parrinello, "Generalized Neural-Network Representation of High-Dimensional Potential-Energy Surfaces," Physical Review Letters, vol. 98, no. 14, p. 146401, 2007.
+\bibitem{behler2011} J. Behler, "Atom-centered symmetry functions for constructing high-dimensional neural network potentials," Journal of Chemical Physics, vol. 134, p. 074106, 2011.
+\bibitem{behler2015} J. Behler, "Constructing high-dimensional neural network potentials: A tutorial review," International Journal of Quantum Chemistry, vol. 115, pp. 1032-1050, 2015.
+
+\item[] \textbf{アクティブラーニング・データ拡張}
+\bibitem{settles2009} B. Settles, "Active Learning Literature Survey," Computer Sciences Technical Report 1648, University of Wisconsin-Madison, 2009.
+\bibitem{podryabinkin2017} E. V. Podryabinkin and A. V. Shapeev, "Active learning of linearly parametrized interatomic potentials," Computational Materials Science, vol. 140, pp. 171-180, 2017.
+\item[] \textbf{ヒストグラム最適化}
+\bibitem{shimazaki2007} H. Shimazaki and S. Shinomoto, "A method for selecting the bin size of a time histogram," Neural Computation, vol. 19, no. 6, pp. 1503-1527, 2007.
+
+\item[] \textbf{先行研究}
+\bibitem{saruya_thesis} 猿谷隆祐, "二元合金系に対する高次元ニューラルネットワークポテンシャルの構築", 修士論文.
+\end{thebibliography}
+\end{document}

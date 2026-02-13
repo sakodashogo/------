@@ -1,0 +1,15 @@
+\begin{table}[h]
+\centering
+\caption{Qualitative comparison of active learning strategies.}
+\label{tab:qualitative_comparison}
+\begin{tabular}{l c c c}
+\hline
+Strategy & Targets Outliers & Targets Gaps & Description \\
+\hline
+Key Motif & Yes & Yes & Maximizes combined score of outlier context and coverage gap. \\
+Gap Only & No & Yes & Focuses solely on filling coverage gaps in RDF/ADF space. \\
+Outlier Only & Yes & No & Focuses solely on structures with high prediction error contexts. \\
+Random & No & No & Randomly selects structures from the candidate pool. \\
+\hline
+\end{tabular}
+\end{table}
